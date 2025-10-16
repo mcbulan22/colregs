@@ -46,7 +46,10 @@ def load_data():
     return student_attempts, topic_performance, question_map, question_topics
 
 if auth_status:
-    st.sidebar.image("maap_logo.png", width=120) if st.sidebar else None
+    try:
+        st.sidebar.image("maap_logo.png", width=120)
+    except:
+        pass  # Logo file not found, skip it
     st.sidebar.title(f"Welcome, {name}")
     authenticator.logout("Logout", "sidebar")
 
