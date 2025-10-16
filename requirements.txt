@@ -1,0 +1,8 @@
+streamlit
+pandas
+matplotlib
+seaborn
+openpyxl
+numpy
+PyYAML
+streamlit-authenticator==0.2.1
