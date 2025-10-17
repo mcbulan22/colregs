@@ -133,23 +133,42 @@ if auth_status:
         # Key metrics
         col1, col2, col3, col4 = st.columns(4)
         with col1:
-            st.metric("Total Students", df['email'].nunique())
+            unique_students = df['email'].nunique()
+            st.metric("Unique Students", unique_students)
         with col2:
-            st.metric("Total Exams", df['exam_id'].nunique())
+            total_exams = df['exam_id'].nunique()
+            st.metric("Unique Exams", total_exams)
         with col3:
             avg_score = student_summary['percentage'].mean()
             st.metric("Average Score", f"{avg_score:.1f}%")
         with col4:
-            st.metric("Total Attempts", len(student_summary))
+            total_attempts = len(student_summary)
+            st.metric("Total Attempts", total_attempts)
+        
+        # Additional context metrics
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            unique_questions = df['global_qid'].nunique()
+            st.metric("Unique Questions", unique_questions)
+        with col2:
+            total_responses = len(df)
+            st.metric("Total Responses", total_responses)
+        with col3:
+            avg_attempts = (len(student_summary) / df['email'].nunique())
+            st.metric("Avg Attempts/Student", f"{avg_attempts:.1f}")
+        with col4:
+            overall_accuracy = (df['score'].sum() / len(df) * 100)
+            st.metric("Overall Accuracy", f"{overall_accuracy:.1f}%")
 
         # Class performance comparison
         st.subheader("📊 Performance by Class")
+        
+        # Calculate class performance considering unique students and their average scores
         class_perf = student_summary.groupby('Class').agg({
-            'percentage': ['mean', 'count'],
-            'total_correct': 'sum',
-            'total_questions': 'sum'
+            'percentage': 'mean',
+            'email': 'nunique'  # Count unique students
         }).reset_index()
-        class_perf.columns = ['Class', 'Avg Score', 'Students', 'Total Correct', 'Total Questions']
+        class_perf.columns = ['Class', 'Avg Score', 'Unique Students']
         class_perf['Avg Score'] = class_perf['Avg Score'].round(1)
         
         col1, col2 = st.columns([2, 1])
@@ -159,7 +178,7 @@ if auth_status:
             ax1.axhline(y=avg_score, color='red', linestyle='--', label=f'Overall Avg: {avg_score:.1f}%')
             ax1.set_xlabel('Class')
             ax1.set_ylabel('Average Score (%)')
-            ax1.set_title('Average Score by Class')
+            ax1.set_title('Average Score by Class (Based on Student Averages)')
             ax1.legend()
             ax1.grid(axis='y', alpha=0.3)
             plt.tight_layout()
