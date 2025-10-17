@@ -203,22 +203,35 @@ if auth_status:
         plt.tight_layout()
         st.pyplot(fig2)
 
-        # Top performers
+        # -------------------------------
+        # Top and Bottom Performers (by average score per student)
+        # -------------------------------
+        st.subheader("🎓 Student Performance Highlights")
+
+        # Compute per-student average percentage across all exams
+        student_avg = (
+            student_summary
+            .groupby(['email', 'full_name', 'Class'])
+            .agg({'percentage': 'mean'})
+            .reset_index()
+            .sort_values(by='percentage', ascending=False)
+        )
+        student_avg['percentage'] = student_avg['percentage'].round(1)
+
         col1, col2 = st.columns(2)
+
+        # Top performers
         with col1:
-            st.subheader("🏆 Top 10 Performers")
-            top_students = student_summary.nlargest(10, 'percentage')[
-                ['full_name', 'Class', 'percentage', 'exam_id']
-            ]
-            top_students.columns = ['Student', 'Class', 'Score (%)', 'Exam']
+            st.subheader("🏆 Top 10 Performers (Average Across Exams)")
+            top_students = student_avg.head(10)[['full_name', 'Class', 'percentage']]
+            top_students.columns = ['Student', 'Class', 'Avg Score (%)']
             st.dataframe(top_students, use_container_width=True, hide_index=True)
-        
+
+        # Students needing support
         with col2:
-            st.subheader("📉 Students Needing Support")
-            bottom_students = student_summary.nsmallest(10, 'percentage')[
-                ['full_name', 'Class', 'percentage', 'exam_id']
-            ]
-            bottom_students.columns = ['Student', 'Class', 'Score (%)', 'Exam']
+            st.subheader("📉 Students Needing Support (Average Across Exams)")
+            bottom_students = student_avg.tail(10)[['full_name', 'Class', 'percentage']]
+            bottom_students.columns = ['Student', 'Class', 'Avg Score (%)']
             st.dataframe(bottom_students, use_container_width=True, hide_index=True)
 
     # -----------------------
