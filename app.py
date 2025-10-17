@@ -460,35 +460,47 @@ if auth_status:
         
         # Class selector
         available_classes = sorted(df['Class'].unique())
-        selected_classes = st.multiselect("Select Classes to Compare", 
-                                         available_classes, default=available_classes)
+        selected_classes = st.multiselect(
+            "Select Classes to Compare", 
+            available_classes, 
+            default=available_classes
+        )
         
         if len(selected_classes) > 0:
-            class_data = student_summary[student_summary['Class'].isin(selected_classes)]
-            
+            # Filter and ensure ordered by class
+            class_data = student_summary[student_summary['Class'].isin(selected_classes)].copy()
+            class_data['Class'] = pd.Categorical(class_data['Class'], categories=available_classes, ordered=True)
+            class_data = class_data.sort_values(by='Class')
+
             # Summary statistics
             st.subheader("📊 Class Statistics")
-            class_stats = class_data.groupby('Class').agg({
-                'percentage': ['mean', 'median', 'std', 'min', 'max'],
-                'email': 'nunique'
-            }).round(1)
+            class_stats = (
+                class_data
+                .groupby('Class', observed=True)
+                .agg({
+                    'percentage': ['mean', 'median', 'std', 'min', 'max'],
+                    'email': 'nunique'
+                })
+                .round(1)
+                .reindex(available_classes)  # keep consistent class order
+            )
             class_stats.columns = ['Mean', 'Median', 'Std Dev', 'Min', 'Max', 'Students']
             st.dataframe(class_stats, use_container_width=True)
 
-            # Box plot comparison
+            # Box plot comparison (ordered by class)
             st.subheader("📦 Score Distribution by Class")
             fig9, ax9 = plt.subplots(figsize=(10, 6))
-            class_data.boxplot(column='percentage', by='Class', ax=ax9)
+            sns.boxplot(data=class_data, x='Class', y='percentage', order=available_classes, ax=ax9)
             ax9.set_xlabel('Class')
             ax9.set_ylabel('Score (%)')
             ax9.set_title('Score Distribution Comparison')
-            plt.suptitle('')
+            ax9.grid(axis='y', alpha=0.3)
             plt.tight_layout()
             st.pyplot(fig9)
 
-            # Violin plot
+            # Violin plot (ordered by class)
             fig10, ax10 = plt.subplots(figsize=(12, 6))
-            sns.violinplot(data=class_data, x='Class', y='percentage', ax=ax10)
+            sns.violinplot(data=class_data, x='Class', y='percentage', order=available_classes, ax=ax10)
             ax10.set_xlabel('Class')
             ax10.set_ylabel('Score (%)')
             ax10.set_title('Score Distribution (Violin Plot)')
@@ -501,20 +513,28 @@ if auth_status:
             
             # Get available topics and filter out NaN
             available_topics = [t for t in df['pred_topic'].unique() if pd.notna(t)]
-            selected_topic = st.selectbox("Select a Topic", 
-                                         sorted(available_topics))
+            selected_topic = st.selectbox(
+                "Select a Topic", 
+                sorted(available_topics)
+            )
             
-            topic_class_data = df[df['pred_topic'] == selected_topic].groupby('Class').agg({
-                'score': ['mean', 'count']
-            }).reset_index()
+            topic_class_data = (
+                df[df['pred_topic'] == selected_topic]
+                .groupby('Class', observed=True)
+                .agg({'score': ['mean', 'count']})
+                .reset_index()
+            )
             topic_class_data.columns = ['Class', 'Accuracy', 'Questions']
             topic_class_data['Accuracy'] = (topic_class_data['Accuracy'] * 100).round(1)
-            
+
+            # Keep class order consistent
+            topic_class_data['Class'] = pd.Categorical(topic_class_data['Class'], categories=available_classes, ordered=True)
+            topic_class_data = topic_class_data.sort_values('Class')
+
             col1, col2 = st.columns([2, 1])
             with col1:
                 fig11, ax11 = plt.subplots(figsize=(10, 5))
-                ax11.bar(topic_class_data['Class'], topic_class_data['Accuracy'], 
-                        color='steelblue', alpha=0.8)
+                ax11.bar(topic_class_data['Class'], topic_class_data['Accuracy'], color='steelblue', alpha=0.8)
                 ax11.set_xlabel('Class')
                 ax11.set_ylabel('Accuracy (%)')
                 ax11.set_title(f'Performance on: {selected_topic}')
