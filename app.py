@@ -523,12 +523,20 @@ if auth_status:
                 st.dataframe(topic_class_data, use_container_width=True, hide_index=True)
 
     # -----------------------
-    # TAB 6: TIME & EFFICIENCY
+    # TAB 6: TIME & EFFICIENCY (with Dropdown Selector)
     # -----------------------
+    
+    # Add these new imports at the top of your main script file
+    import numpy as np
+    import streamlit as st
+    import matplotlib.pyplot as plt
+    from sklearn.mixture import GaussianMixture # For Option 1
+    import statsmodels.api as sm # For Option 2
+    
     with tab6:
         st.header("Time Management & Efficiency Analysis")
-        
-        # Parse duration to minutes
+    
+        # --- Your existing duration_to_minutes function and data loading ---
         def duration_to_minutes(duration_str):
             try:
                 if 'min' in str(duration_str):
@@ -543,14 +551,23 @@ if auth_status:
             except:
                 return None
             return None
-        
+    
         student_summary['duration_minutes'] = student_summary['duration'].apply(duration_to_minutes)
-        valid_duration = student_summary.dropna(subset=['duration_minutes'])
-        
-        if not valid_duration.empty:
-            # Time vs Score correlation
-            st.subheader("⏱️ Time Spent vs Score")
-            
+        valid_duration = student_summary.dropna(subset=['duration_minutes', 'percentage'])
+    
+        if not valid_duration.empty and len(valid_duration) > 2:
+            st.subheader("⏱️ Time Spent vs Score Analysis")
+    
+            # --- Dropdown Selector ---
+            plot_type = st.selectbox(
+                "Choose an analysis method for the scatter plot:",
+                (
+                    "1. Identify Clusters (GMM)",
+                    "2. Flexible Trendline (LOWESS)",
+                    "3. Curved Trendline (Polynomial Fit)"
+                )
+            )
+    
             col1, col2, col3 = st.columns(3)
             with col1:
                 st.metric("Avg Duration", f"{valid_duration['duration_minutes'].mean():.1f} mins")
@@ -558,26 +575,70 @@ if auth_status:
                 st.metric("Median Duration", f"{valid_duration['duration_minutes'].median():.1f} mins")
             with col3:
                 correlation = valid_duration['duration_minutes'].corr(valid_duration['percentage'])
-                st.metric("Time-Score Correlation", f"{correlation:.3f}")
-
-            fig12, ax12 = plt.subplots(figsize=(10, 6))
-            ax12.scatter(valid_duration['duration_minutes'], valid_duration['percentage'], 
-                        alpha=0.6, s=50, color='steelblue')
-            
-            # Add trend line
-            z = np.polyfit(valid_duration['duration_minutes'], valid_duration['percentage'], 1)
-            p = np.poly1d(z)
-            ax12.plot(valid_duration['duration_minutes'], 
-                     p(valid_duration['duration_minutes']), 
-                     "r--", alpha=0.8, linewidth=2, label='Trend')
-            
-            ax12.set_xlabel('Duration (minutes)')
-            ax12.set_ylabel('Score (%)')
-            ax12.set_title('Relationship Between Time Spent and Score')
-            ax12.legend()
-            ax12.grid(True, alpha=0.3)
+                st.metric("Time-Score Correlation", f"{correlation:.3f} (Overall)")
+    
+            # Create the plot
+            fig, ax = plt.subplots(figsize=(10, 6))
+    
+            # --- OPTION 1: GMM Clustering ---
+            if plot_type == "1. Identify Clusters (GMM)":
+                st.info("This method automatically finds distinct groups of behavior.")
+                X = valid_duration[['duration_minutes', 'percentage']]
+                gmm = GaussianMixture(n_components=2, random_state=42).fit(X)
+                labels = gmm.predict(X)
+                
+                scatter = ax.scatter(valid_duration['duration_minutes'], valid_duration['percentage'],
+                                     c=labels, cmap='viridis', alpha=0.6, s=50)
+                ax.set_title('Relationship Between Time Spent and Score (Identified Clusters)')
+                ax.legend(handles=scatter.legend_elements()[0], labels=['Cluster 0', 'Cluster 1'])
+    
+                # Display a summary table for the clusters
+                st.write("#### 🧠 Cluster Characteristics")
+                valid_duration['cluster'] = labels
+                cluster_stats = valid_duration.groupby('cluster').agg(
+                    Count=('cluster', 'size'),
+                    Avg_Duration=('duration_minutes', 'mean'),
+                    Avg_Score=('percentage', 'mean'),
+                    Score_Std_Dev=('percentage', 'std')
+                ).round(1)
+                st.dataframe(cluster_stats, use_container_width=True)
+    
+    
+            # --- OPTION 2: LOWESS Flexible Trendline ---
+            elif plot_type == "2. Flexible Trendline (LOWESS)":
+                st.info("This method creates a smooth line that follows the local trend of the data.")
+                ax.scatter(valid_duration['duration_minutes'], valid_duration['percentage'],
+                           alpha=0.6, s=50, color='steelblue')
+                
+                plot_data = valid_duration.sort_values('duration_minutes')
+                lowess_result = sm.nonparametric.lowess(plot_data['percentage'], plot_data['duration_minutes'], frac=0.4)
+                
+                ax.plot(lowess_result[:, 0], lowess_result[:, 1], 'r--', alpha=0.8, linewidth=2, label='Flexible Trend (LOWESS)')
+                ax.set_title('Relationship Between Time Spent and Score (LOWESS Fit)')
+                ax.legend()
+    
+    
+            # --- OPTION 3: Polynomial Fit ---
+            elif plot_type == "3. Curved Trendline (Polynomial Fit)":
+                st.info("This method fits a single mathematical curve (degree 2) to all the data points.")
+                ax.scatter(valid_duration['duration_minutes'], valid_duration['percentage'],
+                           alpha=0.6, s=50, color='steelblue')
+                
+                degree = 2
+                z = np.polyfit(valid_duration['duration_minutes'], valid_duration['percentage'], degree)
+                p = np.poly1d(z)
+                xp = np.linspace(valid_duration['duration_minutes'].min(), valid_duration['duration_minutes'].max(), 100)
+                
+                ax.plot(xp, p(xp), "r--", alpha=0.8, linewidth=2, label=f'Trend (Degree {degree})')
+                ax.set_title('Relationship Between Time Spent and Score (Polynomial Fit)')
+                ax.legend()
+    
+            # Common plot settings and display
+            ax.set_xlabel('Duration (minutes)')
+            ax.set_ylabel('Score (%)')
+            ax.grid(True, alpha=0.3)
             plt.tight_layout()
-            st.pyplot(fig12)
+            st.pyplot(fig)
 
             # Duration distribution
             st.subheader("📊 Duration Distribution")
