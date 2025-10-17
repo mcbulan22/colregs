@@ -4,6 +4,7 @@ import numpy as np
 import streamlit_authenticator as stauth
 import matplotlib.pyplot as plt
 import seaborn as sns
+from datetime import datetime
 
 st.set_page_config(layout="wide", page_title="COLREGS Performance Dashboard")
 
@@ -30,226 +31,240 @@ name, auth_status, username = authenticator.login("Login", "main")
 # --- LOAD DATA ---
 @st.cache_data
 def load_data():
-    """Load all sheets from the Excel file"""
-    student_attempts = pd.read_excel("colregs_analysis_final.xlsx", sheet_name="student_attempts")
-    topic_performance = pd.read_excel("colregs_analysis_final.xlsx", sheet_name="topic_performance")
-    question_map = pd.read_excel("colregs_analysis_final.xlsx", sheet_name="question_map")
-    question_topics = pd.read_excel("colregs_analysis_final.xlsx", sheet_name="question_topics")
+    """Load and prepare the COLREGS data"""
+    df = pd.read_excel("colregs.xlsx")
     
-    # Create full name column
-    student_attempts['full_name'] = student_attempts['first_name'] + ' ' + student_attempts['last_name']
+    # Create full name
+    df['full_name'] = df['First name'] + ' ' + df['Last name']
     
-    # Convert completed_dt to datetime
-    student_attempts['completed_dt'] = pd.to_datetime(student_attempts['completed_dt'])
-    student_attempts['year'] = student_attempts['completed_dt'].dt.year
+    # Parse datetime
+    df['completed_dt'] = pd.to_datetime(df['Completed'], format='%d/%m/%Y %H:%M', errors='coerce')
+    df['started_dt'] = pd.to_datetime(df['Started'], format='%d/%m/%Y %H:%M', errors='coerce')
     
-    return student_attempts, topic_performance, question_map, question_topics
+    # Extract year
+    df['year'] = df['completed_dt'].dt.year
+    
+    # Clean class names
+    df['Class'] = df['Class'].fillna('Unknown')
+    
+    # Convert score to numeric
+    df['score'] = pd.to_numeric(df['score'], errors='coerce')
+    
+    return df
+
+@st.cache_data
+def get_student_summary(df):
+    """Generate per-student summary statistics"""
+    summary = df.groupby(['email', 'full_name', 'Class', 'exam_id']).agg({
+        'score': 'sum',
+        'question_number': 'count',
+        'completed_dt': 'first',
+        'Duration': 'first',
+        'grade_raw': 'first'
+    }).reset_index()
+    
+    summary.columns = ['email', 'full_name', 'Class', 'exam_id', 'total_correct', 
+                       'total_questions', 'completed_dt', 'duration', 'grade_raw']
+    summary['percentage'] = (summary['total_correct'] / summary['total_questions'] * 100).round(1)
+    
+    return summary
+
+@st.cache_data
+def get_topic_summary(df):
+    """Generate topic-level performance"""
+    topic_perf = df.groupby(['email', 'full_name', 'Class', 'exam_id', 'pred_topic']).agg({
+        'score': ['sum', 'count']
+    }).reset_index()
+    
+    topic_perf.columns = ['email', 'full_name', 'Class', 'exam_id', 'topic', 'correct', 'total']
+    topic_perf['accuracy'] = (topic_perf['correct'] / topic_perf['total'] * 100).round(1)
+    
+    return topic_perf
+
+@st.cache_data
+def get_question_difficulty(df):
+    """Calculate question difficulty across all students"""
+    q_diff = df.groupby(['global_qid', 'question_text', 'pred_topic']).agg({
+        'score': ['sum', 'count', 'mean']
+    }).reset_index()
+    
+    q_diff.columns = ['global_qid', 'question_text', 'topic', 'correct', 'attempts', 'difficulty']
+    q_diff['difficulty'] = (q_diff['difficulty'] * 100).round(1)
+    
+    return q_diff
 
 if auth_status:
     try:
         st.sidebar.image("maap_logo.png", width=120)
     except:
-        pass  # Logo file not found, skip it
+        pass
     st.sidebar.title(f"Welcome, {name}")
     authenticator.logout("Logout", "sidebar")
 
     # Load data
-    student_attempts, topic_performance, question_map, question_topics = load_data()
+    df = load_data()
+    student_summary = get_student_summary(df)
+    topic_summary = get_topic_summary(df)
+    question_difficulty = get_question_difficulty(df)
 
     st.title("⚓ COLREGS Performance Dashboard")
     st.markdown("*Collision Regulations Exam Analysis & Student Progress Tracking*")
 
-    tab1, tab2, tab3 = st.tabs(["👤 Individual Performance", "👥 Cohort Analysis", "📊 Topic Insights"])
+    # Create tabs
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+        "📊 Overview", 
+        "👤 Student Profile", 
+        "🎯 Topic Analysis", 
+        "❓ Question Insights",
+        "📈 Class Comparison",
+        "⏱️ Time & Efficiency"
+    ])
 
     # -----------------------
-    # TAB 1: INDIVIDUAL PERFORMANCE
+    # TAB 1: OVERVIEW DASHBOARD
     # -----------------------
     with tab1:
-        st.header("Individual Student Performance")
-
-        # Student selector
-        student_list = sorted(student_attempts['full_name'].unique())
-        selected_student = st.selectbox("Select a Student", student_list)
-
-        # Get student email
-        student_email = student_attempts[student_attempts['full_name'] == selected_student]['email'].iloc[0]
-
-        # Filter data for selected student
-        student_df = student_attempts[student_attempts['email'] == student_email].sort_values('completed_dt')
-        student_topics = topic_performance[topic_performance['email'] == student_email]
-
+        st.header("Overview Dashboard")
+        
+        # Key metrics
         col1, col2, col3, col4 = st.columns(4)
         with col1:
-            st.metric("Total Attempts", len(student_df))
+            st.metric("Total Students", df['email'].nunique())
         with col2:
-            avg_score = student_df['percent'].mean()
-            st.metric("Average Score", f"{avg_score:.1f}%")
+            st.metric("Total Exams", df['exam_id'].nunique())
         with col3:
-            best_score = student_df['percent'].max()
-            st.metric("Best Score", f"{best_score:.1f}%")
+            avg_score = student_summary['percentage'].mean()
+            st.metric("Average Score", f"{avg_score:.1f}%")
         with col4:
-            total_questions = student_df['total_presented'].sum()
-            st.metric("Total Questions Answered", f"{total_questions:.0f}")
+            st.metric("Total Attempts", len(student_summary))
+
+        # Class performance comparison
+        st.subheader("📊 Performance by Class")
+        class_perf = student_summary.groupby('Class').agg({
+            'percentage': ['mean', 'count'],
+            'total_correct': 'sum',
+            'total_questions': 'sum'
+        }).reset_index()
+        class_perf.columns = ['Class', 'Avg Score', 'Students', 'Total Correct', 'Total Questions']
+        class_perf['Avg Score'] = class_perf['Avg Score'].round(1)
+        
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            fig1, ax1 = plt.subplots(figsize=(10, 5))
+            bars = ax1.bar(class_perf['Class'], class_perf['Avg Score'], color='steelblue', alpha=0.8)
+            ax1.axhline(y=avg_score, color='red', linestyle='--', label=f'Overall Avg: {avg_score:.1f}%')
+            ax1.set_xlabel('Class')
+            ax1.set_ylabel('Average Score (%)')
+            ax1.set_title('Average Score by Class')
+            ax1.legend()
+            ax1.grid(axis='y', alpha=0.3)
+            plt.tight_layout()
+            st.pyplot(fig1)
+        
+        with col2:
+            st.dataframe(class_perf, use_container_width=True, hide_index=True)
+
+        # Score distribution
+        st.subheader("📈 Overall Score Distribution")
+        fig2, ax2 = plt.subplots(figsize=(10, 5))
+        ax2.hist(student_summary['percentage'], bins=20, color='steelblue', alpha=0.7, edgecolor='black')
+        ax2.axvline(student_summary['percentage'].mean(), color='red', linestyle='--', 
+                    linewidth=2, label=f"Mean: {student_summary['percentage'].mean():.1f}%")
+        ax2.axvline(student_summary['percentage'].median(), color='green', linestyle='--', 
+                    linewidth=2, label=f"Median: {student_summary['percentage'].median():.1f}%")
+        ax2.set_xlabel('Score (%)')
+        ax2.set_ylabel('Number of Attempts')
+        ax2.set_title('Score Distribution')
+        ax2.legend()
+        ax2.grid(axis='y', alpha=0.3)
+        plt.tight_layout()
+        st.pyplot(fig2)
+
+        # Top performers
+        col1, col2 = st.columns(2)
+        with col1:
+            st.subheader("🏆 Top 10 Performers")
+            top_students = student_summary.nlargest(10, 'percentage')[
+                ['full_name', 'Class', 'percentage', 'exam_id']
+            ]
+            top_students.columns = ['Student', 'Class', 'Score (%)', 'Exam']
+            st.dataframe(top_students, use_container_width=True, hide_index=True)
+        
+        with col2:
+            st.subheader("📉 Students Needing Support")
+            bottom_students = student_summary.nsmallest(10, 'percentage')[
+                ['full_name', 'Class', 'percentage', 'exam_id']
+            ]
+            bottom_students.columns = ['Student', 'Class', 'Score (%)', 'Exam']
+            st.dataframe(bottom_students, use_container_width=True, hide_index=True)
+
+    # -----------------------
+    # TAB 2: STUDENT PROFILE
+    # -----------------------
+    with tab2:
+        st.header("Individual Student Profile")
+        
+        # Student selector
+        student_list = sorted(df['full_name'].unique())
+        selected_student = st.selectbox("Select a Student", student_list)
+        
+        # Get student data
+        student_email = df[df['full_name'] == selected_student]['email'].iloc[0]
+        student_class = df[df['full_name'] == selected_student]['Class'].iloc[0]
+        student_data = student_summary[student_summary['email'] == student_email]
+        student_questions = df[df['email'] == student_email]
+        student_topics = topic_summary[topic_summary['email'] == student_email]
+        
+        # Header info
+        st.markdown(f"**Class:** {student_class} | **Email:** {student_email}")
+        
+        # Key metrics
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Total Attempts", len(student_data))
+        with col2:
+            st.metric("Average Score", f"{student_data['percentage'].mean():.1f}%")
+        with col3:
+            st.metric("Best Score", f"{student_data['percentage'].max():.1f}%")
+        with col4:
+            st.metric("Questions Answered", len(student_questions))
 
         # Attempt history
         st.subheader("📋 Exam Attempt History")
-        display_df = student_df[['exam_id', 'completed_dt', 'total_presented', 'total_correct', 'percent']].copy()
-        display_df.columns = ['Exam ID', 'Date', 'Questions', 'Correct', 'Score (%)']
-        display_df['Date'] = display_df['Date'].dt.strftime('%Y-%m-%d %H:%M')
-        st.dataframe(display_df, use_container_width=True)
+        display_attempts = student_data[['exam_id', 'completed_dt', 'total_questions', 
+                                        'total_correct', 'percentage', 'duration']].copy()
+        display_attempts['completed_dt'] = display_attempts['completed_dt'].dt.strftime('%Y-%m-%d %H:%M')
+        display_attempts.columns = ['Exam', 'Date', 'Questions', 'Correct', 'Score (%)', 'Duration']
+        st.dataframe(display_attempts, use_container_width=True, hide_index=True)
 
-        # Score progression over time
-        if len(student_df) > 1:
-            st.subheader("📈 Score Progression Over Time")
-            fig1, ax1 = plt.subplots(figsize=(10, 5))
-            ax1.plot(student_df['completed_dt'], student_df['percent'], marker='o', linewidth=2, markersize=8)
-            ax1.set_xlabel('Date')
-            ax1.set_ylabel('Score (%)')
-            ax1.set_title(f"{selected_student} - Score Progression")
-            ax1.grid(True, alpha=0.3)
-            plt.xticks(rotation=45, ha='right')
-            plt.tight_layout()
-            st.pyplot(fig1)
-
-        # Topic performance breakdown
-        if not student_topics.empty:
-            st.subheader("🎯 Topic Performance Breakdown")
-            
-            # Aggregate by topic
-            topic_summary = student_topics.groupby('pred_topic').agg({
-                'n_presented': 'sum',
-                'n_correct': 'sum'
-            }).reset_index()
-            topic_summary['accuracy'] = (topic_summary['n_correct'] / topic_summary['n_presented'] * 100).round(1)
-            topic_summary = topic_summary.sort_values('accuracy', ascending=False)
-
-            # Bar chart
-            fig2, ax2 = plt.subplots(figsize=(12, 6))
-            bars = ax2.barh(topic_summary['pred_topic'], topic_summary['accuracy'])
-            
-            # Color bars by performance
-            for i, (bar, acc) in enumerate(zip(bars, topic_summary['accuracy'])):
-                if acc >= 80:
-                    bar.set_color('#28a745')  # Green
-                elif acc >= 60:
-                    bar.set_color('#ffc107')  # Yellow
-                else:
-                    bar.set_color('#dc3545')  # Red
-            
-            ax2.set_xlabel('Accuracy (%)')
-            ax2.set_title(f"{selected_student} - Performance by COLREGS Topic")
-            ax2.axvline(x=80, color='green', linestyle='--', alpha=0.3, label='Excellent (80%+)')
-            ax2.axvline(x=60, color='orange', linestyle='--', alpha=0.3, label='Good (60%+)')
-            ax2.legend()
-            plt.tight_layout()
-            st.pyplot(fig2)
-
-            # Topic details table
-            st.subheader("📊 Detailed Topic Statistics")
-            topic_display = topic_summary[['pred_topic', 'n_presented', 'n_correct', 'accuracy']].copy()
-            topic_display.columns = ['Topic', 'Questions Presented', 'Correct', 'Accuracy (%)']
-            st.dataframe(topic_display, use_container_width=True)
-
-    # -----------------------
-    # TAB 2: COHORT ANALYSIS
-    # -----------------------
-    with tab2:
-        st.header("Cohort Performance Analysis")
-
-        # Filters
-        col1, col2 = st.columns(2)
-        with col1:
-            years = sorted(student_attempts['year'].unique())
-            selected_years = st.multiselect("Select Year(s)", years, default=years)
-        with col2:
-            exam_ids = sorted(student_attempts['exam_id'].unique())
-            selected_exams = st.multiselect("Select Exam(s)", exam_ids, default=exam_ids)
-
-        # Filter data
-        cohort_df = student_attempts[
-            (student_attempts['year'].isin(selected_years)) &
-            (student_attempts['exam_id'].isin(selected_exams))
-        ]
-        cohort_topics = topic_performance[
-            topic_performance['email'].isin(cohort_df['email'])
-        ]
-
-        if not cohort_df.empty:
-            # Summary metrics
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("Total Students", cohort_df['email'].nunique())
-            with col2:
-                st.metric("Total Attempts", len(cohort_df))
-            with col3:
-                st.metric("Avg Score", f"{cohort_df['percent'].mean():.1f}%")
-            with col4:
-                st.metric("Avg Questions/Exam", f"{cohort_df['total_presented'].mean():.0f}")
-
-            # Score distribution
-            st.subheader("📊 Score Distribution")
-            fig3, ax3 = plt.subplots(figsize=(10, 5))
-            ax3.hist(cohort_df['percent'], bins=20, edgecolor='black', alpha=0.7)
-            ax3.axvline(cohort_df['percent'].mean(), color='red', linestyle='--', linewidth=2, label=f"Mean: {cohort_df['percent'].mean():.1f}%")
-            ax3.axvline(cohort_df['percent'].median(), color='green', linestyle='--', linewidth=2, label=f"Median: {cohort_df['percent'].median():.1f}%")
-            ax3.set_xlabel('Score (%)')
-            ax3.set_ylabel('Number of Attempts')
-            ax3.set_title('Score Distribution Across Cohort')
-            ax3.legend()
+        # Score progression
+        if len(student_data) > 1:
+            st.subheader("📈 Score Progression")
+            fig3, ax3 = plt.subplots(figsize=(10, 4))
+            ax3.plot(range(1, len(student_data) + 1), student_data['percentage'].values, 
+                    marker='o', linewidth=2, markersize=8, color='steelblue')
+            ax3.set_xlabel('Attempt Number')
+            ax3.set_ylabel('Score (%)')
+            ax3.set_title(f"{selected_student} - Score Progression")
+            ax3.grid(True, alpha=0.3)
             plt.tight_layout()
             st.pyplot(fig3)
 
-            # Performance by exam
-            st.subheader("📈 Average Performance by Exam")
-            exam_summary = cohort_df.groupby('exam_id')['percent'].agg(['mean', 'count', 'std']).reset_index()
-            exam_summary.columns = ['Exam ID', 'Average Score (%)', 'Attempts', 'Std Dev']
-            exam_summary['Average Score (%)'] = exam_summary['Average Score (%)'].round(1)
-            exam_summary['Std Dev'] = exam_summary['Std Dev'].round(1)
-            st.dataframe(exam_summary, use_container_width=True)
-
-            # Performance over time
-            if len(selected_years) > 1:
-                st.subheader("📅 Performance Trends by Year")
-                yearly_summary = cohort_df.groupby('year')['percent'].mean().reset_index()
-                
-                fig4, ax4 = plt.subplots(figsize=(10, 5))
-                ax4.plot(yearly_summary['year'], yearly_summary['percent'], marker='o', linewidth=2, markersize=10)
-                ax4.set_xlabel('Year')
-                ax4.set_ylabel('Average Score (%)')
-                ax4.set_title('Average Performance by Year')
-                ax4.grid(True, alpha=0.3)
-                plt.tight_layout()
-                st.pyplot(fig4)
-
-    # -----------------------
-    # TAB 3: TOPIC INSIGHTS
-    # -----------------------
-    with tab3:
-        st.header("COLREGS Topic Performance Insights")
-
-        # Filters
-        years_topic = sorted(student_attempts['year'].unique())
-        selected_years_topic = st.multiselect("Select Year(s)", years_topic, default=years_topic, key="topic_years")
-
-        # Filter
-        filtered_emails = student_attempts[student_attempts['year'].isin(selected_years_topic)]['email'].unique()
-        filtered_topics = topic_performance[topic_performance['email'].isin(filtered_emails)]
-
-        if not filtered_topics.empty:
-            # Aggregate topic performance
-            topic_agg = filtered_topics.groupby('pred_topic').agg({
-                'n_presented': 'sum',
-                'n_correct': 'sum'
-            }).reset_index()
-            topic_agg['accuracy'] = (topic_agg['n_correct'] / topic_agg['n_presented'] * 100).round(1)
-            topic_agg = topic_agg.sort_values('accuracy', ascending=False)
-
-            # Overall topic performance
-            st.subheader("🎯 Overall Topic Performance")
-            fig5, ax5 = plt.subplots(figsize=(12, 8))
-            bars = ax5.barh(topic_agg['pred_topic'], topic_agg['accuracy'])
+        # Topic performance
+        if not student_topics.empty:
+            st.subheader("🎯 Performance by Topic")
             
-            # Color by performance
+            topic_agg = student_topics.groupby('topic').agg({
+                'correct': 'sum',
+                'total': 'sum'
+            }).reset_index()
+            topic_agg['accuracy'] = (topic_agg['correct'] / topic_agg['total'] * 100).round(1)
+            topic_agg = topic_agg.sort_values('accuracy', ascending=True)
+            
+            fig4, ax4 = plt.subplots(figsize=(12, 6))
+            bars = ax4.barh(topic_agg['topic'], topic_agg['accuracy'])
+            
+            # Color code by performance
             for bar, acc in zip(bars, topic_agg['accuracy']):
                 if acc >= 80:
                     bar.set_color('#28a745')
@@ -258,62 +273,349 @@ if auth_status:
                 else:
                     bar.set_color('#dc3545')
             
-            ax5.set_xlabel('Accuracy (%)')
-            ax5.set_title('COLREGS Topic Performance Across All Students')
-            ax5.axvline(x=80, color='green', linestyle='--', alpha=0.3)
-            ax5.axvline(x=60, color='orange', linestyle='--', alpha=0.3)
+            ax4.set_xlabel('Accuracy (%)')
+            ax4.set_title(f"{selected_student} - Topic Performance")
+            ax4.axvline(x=80, color='green', linestyle='--', alpha=0.3, label='Excellent (80%+)')
+            ax4.axvline(x=60, color='orange', linestyle='--', alpha=0.3, label='Good (60%+)')
+            ax4.legend()
             plt.tight_layout()
-            st.pyplot(fig5)
-
-            # Topic statistics table
+            st.pyplot(fig4)
+            
+            # Topic details
             st.subheader("📊 Topic Statistics")
-            topic_display = topic_agg[['pred_topic', 'n_presented', 'n_correct', 'accuracy']].copy()
-            topic_display.columns = ['Topic', 'Total Questions', 'Total Correct', 'Accuracy (%)']
-            
-            # Add performance category
-            def categorize(acc):
-                if acc >= 80:
-                    return "✅ Excellent"
-                elif acc >= 60:
-                    return "⚠️ Good"
-                else:
-                    return "❌ Needs Improvement"
-            
-            topic_display['Performance'] = topic_display['Accuracy (%)'].apply(categorize)
-            st.dataframe(topic_display, use_container_width=True)
+            topic_display = topic_agg[['topic', 'total', 'correct', 'accuracy']].copy()
+            topic_display.columns = ['Topic', 'Questions', 'Correct', 'Accuracy (%)']
+            st.dataframe(topic_display, use_container_width=True, hide_index=True)
 
-            # Heatmap: Topic performance by exam
-            st.subheader("🔥 Topic Performance Heatmap by Exam")
+        # Individual question breakdown
+        st.subheader("❓ Question-by-Question Breakdown")
+        question_breakdown = student_questions[['question_number', 'question_text', 'pred_topic', 
+                                                'score', 'exam_id']].copy()
+        question_breakdown['result'] = question_breakdown['score'].apply(lambda x: '✅' if x == 1 else '❌')
+        question_breakdown = question_breakdown[['exam_id', 'question_number', 'pred_topic', 'result', 'question_text']]
+        question_breakdown.columns = ['Exam', 'Q#', 'Topic', 'Result', 'Question Text']
+        st.dataframe(question_breakdown, use_container_width=True, hide_index=True)
+
+    # -----------------------
+    # TAB 3: TOPIC ANALYSIS
+    # -----------------------
+    with tab3:
+        st.header("COLREGS Topic Analysis")
+        
+        # Overall topic performance
+        st.subheader("🎯 Overall Topic Performance")
+        
+        overall_topics = df.groupby('pred_topic').agg({
+            'score': ['sum', 'count', 'mean']
+        }).reset_index()
+        overall_topics.columns = ['topic', 'correct', 'total', 'accuracy']
+        overall_topics['accuracy'] = (overall_topics['accuracy'] * 100).round(1)
+        overall_topics = overall_topics.sort_values('accuracy', ascending=True)
+        
+        fig5, ax5 = plt.subplots(figsize=(12, 8))
+        bars = ax5.barh(overall_topics['topic'], overall_topics['accuracy'])
+        
+        for bar, acc in zip(bars, overall_topics['accuracy']):
+            if acc >= 80:
+                bar.set_color('#28a745')
+            elif acc >= 60:
+                bar.set_color('#ffc107')
+            else:
+                bar.set_color('#dc3545')
+        
+        ax5.set_xlabel('Accuracy (%)')
+        ax5.set_title('COLREGS Topic Performance Across All Students')
+        ax5.axvline(x=80, color='green', linestyle='--', alpha=0.3)
+        ax5.axvline(x=60, color='orange', linestyle='--', alpha=0.3)
+        plt.tight_layout()
+        st.pyplot(fig5)
+        
+        # Topic statistics
+        col1, col2 = st.columns(2)
+        with col1:
+            st.subheader("✅ Strongest Topics")
+            strong_topics = overall_topics.nlargest(5, 'accuracy')[['topic', 'accuracy', 'total']]
+            strong_topics.columns = ['Topic', 'Accuracy (%)', 'Questions']
+            st.dataframe(strong_topics, use_container_width=True, hide_index=True)
+        
+        with col2:
+            st.subheader("⚠️ Topics Needing Focus")
+            weak_topics = overall_topics.nsmallest(5, 'accuracy')[['topic', 'accuracy', 'total']]
+            weak_topics.columns = ['Topic', 'Accuracy (%)', 'Questions']
+            st.dataframe(weak_topics, use_container_width=True, hide_index=True)
+
+        # Topic performance by class
+        st.subheader("📊 Topic Performance by Class")
+        
+        class_topics = df.groupby(['Class', 'pred_topic']).agg({
+            'score': ['sum', 'count']
+        }).reset_index()
+        class_topics.columns = ['Class', 'Topic', 'correct', 'total']
+        class_topics['accuracy'] = (class_topics['correct'] / class_topics['total'] * 100).round(1)
+        
+        pivot_class_topics = class_topics.pivot(index='Topic', columns='Class', values='accuracy')
+        
+        if not pivot_class_topics.empty:
+            fig6, ax6 = plt.subplots(figsize=(12, 10))
+            sns.heatmap(pivot_class_topics, annot=True, fmt='.1f', cmap='RdYlGn', 
+                       center=70, vmin=0, vmax=100, cbar_kws={'label': 'Accuracy (%)'}, ax=ax6)
+            ax6.set_title('Topic Performance Heatmap by Class')
+            ax6.set_xlabel('Class')
+            ax6.set_ylabel('COLREGS Topic')
+            plt.tight_layout()
+            st.pyplot(fig6)
+
+    # -----------------------
+    # TAB 4: QUESTION INSIGHTS
+    # -----------------------
+    with tab4:
+        st.header("Question-Level Insights")
+        
+        # Question difficulty distribution
+        st.subheader("📊 Question Difficulty Distribution")
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            easy = len(question_difficulty[question_difficulty['difficulty'] >= 80])
+            st.metric("Easy Questions (80%+)", easy)
+        with col2:
+            medium = len(question_difficulty[(question_difficulty['difficulty'] >= 50) & 
+                                            (question_difficulty['difficulty'] < 80)])
+            st.metric("Medium Questions (50-79%)", medium)
+        with col3:
+            hard = len(question_difficulty[question_difficulty['difficulty'] < 50])
+            st.metric("Hard Questions (<50%)", hard)
+
+        fig7, ax7 = plt.subplots(figsize=(10, 5))
+        ax7.hist(question_difficulty['difficulty'], bins=20, color='steelblue', 
+                alpha=0.7, edgecolor='black')
+        ax7.set_xlabel('Difficulty (%)')
+        ax7.set_ylabel('Number of Questions')
+        ax7.set_title('Question Difficulty Distribution')
+        ax7.axvline(x=50, color='red', linestyle='--', alpha=0.5, label='Hard threshold')
+        ax7.axvline(x=80, color='green', linestyle='--', alpha=0.5, label='Easy threshold')
+        ax7.legend()
+        plt.tight_layout()
+        st.pyplot(fig7)
+
+        # Most challenging questions
+        st.subheader("❌ Most Challenging Questions")
+        challenging = question_difficulty.nsmallest(10, 'difficulty')[
+            ['question_text', 'topic', 'difficulty', 'attempts']
+        ]
+        challenging.columns = ['Question', 'Topic', 'Success Rate (%)', 'Attempts']
+        st.dataframe(challenging, use_container_width=True, hide_index=True)
+
+        # Easiest questions
+        st.subheader("✅ Easiest Questions")
+        easiest = question_difficulty.nlargest(10, 'difficulty')[
+            ['question_text', 'topic', 'difficulty', 'attempts']
+        ]
+        easiest.columns = ['Question', 'Topic', 'Success Rate (%)', 'Attempts']
+        st.dataframe(easiest, use_container_width=True, hide_index=True)
+
+        # Question difficulty by topic
+        st.subheader("📈 Average Question Difficulty by Topic")
+        topic_q_diff = question_difficulty.groupby('topic')['difficulty'].mean().sort_values()
+        
+        fig8, ax8 = plt.subplots(figsize=(10, 6))
+        ax8.barh(topic_q_diff.index, topic_q_diff.values, color='coral', alpha=0.8)
+        ax8.set_xlabel('Average Success Rate (%)')
+        ax8.set_title('Question Difficulty by Topic')
+        ax8.grid(axis='x', alpha=0.3)
+        plt.tight_layout()
+        st.pyplot(fig8)
+
+    # -----------------------
+    # TAB 5: CLASS COMPARISON
+    # -----------------------
+    with tab5:
+        st.header("Class Performance Comparison")
+        
+        # Class selector
+        available_classes = sorted(df['Class'].unique())
+        selected_classes = st.multiselect("Select Classes to Compare", 
+                                         available_classes, default=available_classes)
+        
+        if len(selected_classes) > 0:
+            class_data = student_summary[student_summary['Class'].isin(selected_classes)]
             
-            # Create pivot table
-            pivot_data = filtered_topics.groupby(['exam_id', 'pred_topic']).agg({
-                'n_correct': 'sum',
-                'n_presented': 'sum'
+            # Summary statistics
+            st.subheader("📊 Class Statistics")
+            class_stats = class_data.groupby('Class').agg({
+                'percentage': ['mean', 'median', 'std', 'min', 'max'],
+                'email': 'nunique'
+            }).round(1)
+            class_stats.columns = ['Mean', 'Median', 'Std Dev', 'Min', 'Max', 'Students']
+            st.dataframe(class_stats, use_container_width=True)
+
+            # Box plot comparison
+            st.subheader("📦 Score Distribution by Class")
+            fig9, ax9 = plt.subplots(figsize=(10, 6))
+            class_data.boxplot(column='percentage', by='Class', ax=ax9)
+            ax9.set_xlabel('Class')
+            ax9.set_ylabel('Score (%)')
+            ax9.set_title('Score Distribution Comparison')
+            plt.suptitle('')
+            plt.tight_layout()
+            st.pyplot(fig9)
+
+            # Violin plot
+            fig10, ax10 = plt.subplots(figsize=(12, 6))
+            sns.violinplot(data=class_data, x='Class', y='percentage', ax=ax10)
+            ax10.set_xlabel('Class')
+            ax10.set_ylabel('Score (%)')
+            ax10.set_title('Score Distribution (Violin Plot)')
+            ax10.grid(axis='y', alpha=0.3)
+            plt.tight_layout()
+            st.pyplot(fig10)
+
+            # Topic comparison across classes
+            st.subheader("🎯 Topic Performance Comparison")
+            
+            selected_topic = st.selectbox("Select a Topic", 
+                                         sorted(df['pred_topic'].unique()))
+            
+            topic_class_data = df[df['pred_topic'] == selected_topic].groupby('Class').agg({
+                'score': ['mean', 'count']
             }).reset_index()
-            pivot_data['accuracy'] = (pivot_data['n_correct'] / pivot_data['n_presented'] * 100).round(1)
-            pivot_table = pivot_data.pivot(index='pred_topic', columns='exam_id', values='accuracy')
+            topic_class_data.columns = ['Class', 'Accuracy', 'Questions']
+            topic_class_data['Accuracy'] = (topic_class_data['Accuracy'] * 100).round(1)
             
-            if not pivot_table.empty:
-                fig6, ax6 = plt.subplots(figsize=(14, 10))
-                sns.heatmap(pivot_table, annot=True, fmt='.1f', cmap='RdYlGn', center=70, 
-                           vmin=0, vmax=100, cbar_kws={'label': 'Accuracy (%)'}, ax=ax6)
-                ax6.set_title('Topic Performance Heatmap by Exam')
-                ax6.set_xlabel('Exam ID')
-                ax6.set_ylabel('COLREGS Topic')
+            col1, col2 = st.columns([2, 1])
+            with col1:
+                fig11, ax11 = plt.subplots(figsize=(10, 5))
+                ax11.bar(topic_class_data['Class'], topic_class_data['Accuracy'], 
+                        color='steelblue', alpha=0.8)
+                ax11.set_xlabel('Class')
+                ax11.set_ylabel('Accuracy (%)')
+                ax11.set_title(f'Performance on: {selected_topic}')
+                ax11.grid(axis='y', alpha=0.3)
                 plt.tight_layout()
-                st.pyplot(fig6)
+                st.pyplot(fig11)
+            
+            with col2:
+                st.dataframe(topic_class_data, use_container_width=True, hide_index=True)
 
-            # Most challenging topics
-            st.subheader("⚠️ Most Challenging Topics")
-            challenging = topic_agg.nsmallest(5, 'accuracy')[['pred_topic', 'accuracy', 'n_presented']]
-            challenging.columns = ['Topic', 'Accuracy (%)', 'Questions Asked']
-            st.dataframe(challenging, use_container_width=True)
+    # -----------------------
+    # TAB 6: TIME & EFFICIENCY
+    # -----------------------
+    with tab6:
+        st.header("Time Management & Efficiency Analysis")
+        
+        # Parse duration to minutes
+        def duration_to_minutes(duration_str):
+            try:
+                if 'min' in str(duration_str):
+                    parts = str(duration_str).split()
+                    minutes = 0
+                    for i, part in enumerate(parts):
+                        if 'min' in part and i > 0:
+                            minutes += int(parts[i-1])
+                        elif 'sec' in part and i > 0:
+                            minutes += int(parts[i-1]) / 60
+                    return minutes
+            except:
+                return None
+            return None
+        
+        student_summary['duration_minutes'] = student_summary['duration'].apply(duration_to_minutes)
+        valid_duration = student_summary.dropna(subset=['duration_minutes'])
+        
+        if not valid_duration.empty:
+            # Time vs Score correlation
+            st.subheader("⏱️ Time Spent vs Score")
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Avg Duration", f"{valid_duration['duration_minutes'].mean():.1f} mins")
+            with col2:
+                st.metric("Median Duration", f"{valid_duration['duration_minutes'].median():.1f} mins")
+            with col3:
+                correlation = valid_duration['duration_minutes'].corr(valid_duration['percentage'])
+                st.metric("Time-Score Correlation", f"{correlation:.3f}")
 
-            # Best performing topics
-            st.subheader("✅ Best Performing Topics")
-            best = topic_agg.nlargest(5, 'accuracy')[['pred_topic', 'accuracy', 'n_presented']]
-            best.columns = ['Topic', 'Accuracy (%)', 'Questions Asked']
-            st.dataframe(best, use_container_width=True)
+            fig12, ax12 = plt.subplots(figsize=(10, 6))
+            ax12.scatter(valid_duration['duration_minutes'], valid_duration['percentage'], 
+                        alpha=0.6, s=50, color='steelblue')
+            
+            # Add trend line
+            z = np.polyfit(valid_duration['duration_minutes'], valid_duration['percentage'], 1)
+            p = np.poly1d(z)
+            ax12.plot(valid_duration['duration_minutes'], 
+                     p(valid_duration['duration_minutes']), 
+                     "r--", alpha=0.8, linewidth=2, label='Trend')
+            
+            ax12.set_xlabel('Duration (minutes)')
+            ax12.set_ylabel('Score (%)')
+            ax12.set_title('Relationship Between Time Spent and Score')
+            ax12.legend()
+            ax12.grid(True, alpha=0.3)
+            plt.tight_layout()
+            st.pyplot(fig12)
+
+            # Duration distribution
+            st.subheader("📊 Duration Distribution")
+            fig13, ax13 = plt.subplots(figsize=(10, 5))
+            ax13.hist(valid_duration['duration_minutes'], bins=20, color='coral', 
+                     alpha=0.7, edgecolor='black')
+            ax13.axvline(valid_duration['duration_minutes'].mean(), color='red', 
+                        linestyle='--', linewidth=2, label='Mean')
+            ax13.axvline(valid_duration['duration_minutes'].median(), color='green', 
+                        linestyle='--', linewidth=2, label='Median')
+            ax13.set_xlabel('Duration (minutes)')
+            ax13.set_ylabel('Number of Attempts')
+            ax13.set_title('Exam Duration Distribution')
+            ax13.legend()
+            plt.tight_layout()
+            st.pyplot(fig13)
+
+            # Fast vs Slow performers
+            st.subheader("🏃 Speed vs Performance Analysis")
+            
+            median_time = valid_duration['duration_minutes'].median()
+            valid_duration['speed_category'] = valid_duration['duration_minutes'].apply(
+                lambda x: 'Fast (<median)' if x < median_time else 'Slow (>=median)'
+            )
+            
+            speed_analysis = valid_duration.groupby('speed_category')['percentage'].agg(['mean', 'count']).reset_index()
+            speed_analysis.columns = ['Category', 'Avg Score (%)', 'Count']
+            speed_analysis['Avg Score (%)'] = speed_analysis['Avg Score (%)'].round(1)
+            
+            col1, col2 = st.columns([2, 1])
+            with col1:
+                fig14, ax14 = plt.subplots(figsize=(8, 5))
+                ax14.bar(speed_analysis['Category'], speed_analysis['Avg Score (%)'], 
+                        color=['lightcoral', 'lightblue'], alpha=0.8)
+                ax14.set_ylabel('Average Score (%)')
+                ax14.set_title('Performance: Fast vs Slow Test Takers')
+                ax14.grid(axis='y', alpha=0.3)
+                plt.tight_layout()
+                st.pyplot(fig14)
+            
+            with col2:
+                st.dataframe(speed_analysis, use_container_width=True, hide_index=True)
+
+            # Time by class
+            st.subheader("⏰ Average Duration by Class")
+            class_duration = valid_duration.groupby('Class')['duration_minutes'].agg(['mean', 'std']).reset_index()
+            class_duration.columns = ['Class', 'Avg Duration (mins)', 'Std Dev']
+            class_duration = class_duration.round(1)
+            
+            fig15, ax15 = plt.subplots(figsize=(10, 5))
+            ax15.bar(class_duration['Class'], class_duration['Avg Duration (mins)'], 
+                    color='mediumseagreen', alpha=0.8)
+            ax15.set_xlabel('Class')
+            ax15.set_ylabel('Average Duration (minutes)')
+            ax15.set_title('Average Exam Duration by Class')
+            ax15.grid(axis='y', alpha=0.3)
+            plt.tight_layout()
+            st.pyplot(fig15)
+            
+            st.dataframe(class_duration, use_container_width=True, hide_index=True)
+        
+        else:
+            st.warning("Duration data not available for analysis.")
 
 else:
     st.warning("Please enter your credentials to access the COLREGS Dashboard.")
