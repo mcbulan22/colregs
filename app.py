@@ -234,10 +234,13 @@ if auth_status:
         # Get student data
         student_email = df[df['full_name'] == selected_student]['email'].iloc[0]
         student_class = df[df['full_name'] == selected_student]['Class'].iloc[0]
-        student_data = student_summary[student_summary['email'] == student_email]
+        student_data = student_summary[student_summary['email'] == student_email].copy()
         student_questions = df[df['email'] == student_email]
         student_topics = topic_summary[topic_summary['email'] == student_email]
         
+        # Sort attempts by completion date (ascending)
+        student_data = student_data.sort_values(by='completed_dt', ascending=True)
+
         # Header info
         st.markdown(f"**Class:** {student_class} | **Email:** {student_email}")
         
@@ -255,7 +258,7 @@ if auth_status:
         # Attempt history
         st.subheader("📋 Exam Attempt History")
         display_attempts = student_data[['exam_id', 'completed_dt', 'total_questions', 
-                                        'total_correct', 'percentage', 'duration']].copy()
+                                         'total_correct', 'percentage', 'duration']].copy()
         display_attempts['completed_dt'] = display_attempts['completed_dt'].dt.strftime('%Y-%m-%d %H:%M')
         display_attempts.columns = ['Exam', 'Date', 'Questions', 'Correct', 'Score (%)', 'Duration']
         st.dataframe(display_attempts, use_container_width=True, hide_index=True)
@@ -264,11 +267,11 @@ if auth_status:
         if len(student_data) > 1:
             st.subheader("📈 Score Progression")
             fig3, ax3 = plt.subplots(figsize=(10, 4))
-            ax3.plot(range(1, len(student_data) + 1), student_data['percentage'].values, 
-                    marker='o', linewidth=2, markersize=8, color='steelblue')
-            ax3.set_xlabel('Attempt Number')
+            ax3.plot(student_data['completed_dt'], student_data['percentage'].values, 
+                     marker='o', linewidth=2, markersize=8, color='steelblue')
+            ax3.set_xlabel('Date')
             ax3.set_ylabel('Score (%)')
-            ax3.set_title(f"{selected_student} - Score Progression")
+            ax3.set_title(f"{selected_student} - Score Progression Over Time")
             ax3.grid(True, alpha=0.3)
             plt.tight_layout()
             st.pyplot(fig3)
