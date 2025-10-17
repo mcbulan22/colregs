@@ -44,11 +44,15 @@ def load_data():
     # Extract year
     df['year'] = df['completed_dt'].dt.year
     
-    # Clean class names
+    # Clean class names and filter out "Not Found"
     df['Class'] = df['Class'].fillna('Unknown')
+    df = df[df['Class'] != 'Not Found']
     
     # Convert score to numeric
     df['score'] = pd.to_numeric(df['score'], errors='coerce')
+    
+    # Clean pred_topic - remove NaN values
+    df['pred_topic'] = df['pred_topic'].fillna('Unknown Topic')
     
     return df
 
@@ -473,8 +477,10 @@ if auth_status:
             # Topic comparison across classes
             st.subheader("🎯 Topic Performance Comparison")
             
+            # Get available topics and filter out NaN
+            available_topics = [t for t in df['pred_topic'].unique() if pd.notna(t)]
             selected_topic = st.selectbox("Select a Topic", 
-                                         sorted(df['pred_topic'].unique()))
+                                         sorted(available_topics))
             
             topic_class_data = df[df['pred_topic'] == selected_topic].groupby('Class').agg({
                 'score': ['mean', 'count']
